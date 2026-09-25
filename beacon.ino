@@ -10,7 +10,15 @@ const uint16_t DW1000_ANTENNA_DELAY = 16470; // 1 unit = 15.65ps (picoseconds)
 #define SPI_MOSI 23 // SPI data out (controller -> peripheral, purely configuration data)
 #define PIN_RST 27  // Hardware reset (controller pulls to LOW during init to reboot peripheral)
 #define PIN_IRQ 34  // Interrupt (peripheral raises to HIGH when it has a completed measurement)
-#define DW1000_HARDWARE_ADDRESS "86:17:5B:D5:A9:9A:E2:9C" // Unique hardware address of DW1000 UWB chip
+#define BEACON_HARDWARE_ADDRESS "86:17:5B:D5:A9:9A:E2:9C" // Hardware address of the onboard DW1000 UWB chip
+#define ROVER_HARDWARE_ADDRESS "7D:00:22:EA:82:60:3B:9C"  // Hardware address of rover DW1000 UWB chip
+#define ROVER_SHORT_ADDRESS 0xA49C                        // Short address of rover, derived from first two bytes of ROVER_HARDWARE_ADDRESS
+
+// Logging functions
+inline void LOG_DEBUG(const String& msg) { Serial.print("[  DEBUG  ] "); Serial.println(msg); }
+inline void LOG_INFO(const String& msg)  { Serial.print("[  INFO   ] "); Serial.println(msg); }
+inline void LOG_WARN(const String& msg)  { Serial.print("[! WARN ! ] "); Serial.println(msg); }
+inline void LOG_ERROR(const String& msg) { Serial.print("[** ERROR **] "); Serial.println(msg); }
 
 void setup() {
     Serial.begin(9600); // Baud rate 9600 Bd
@@ -23,7 +31,7 @@ void setup() {
     DW1000Ranging.attachBlinkDevice(newDevice); // Called when an unseen device joins the ranging exchange; only fires on initial detection of rover
     DW1000Ranging.attachInactiveDevice(inactiveDevice); // Called when a device hasn't been heard from (lost connection, out of range)
 
-    DW1000Ranging.startAsAnchor(DW1000_HARDWARE_ADDRESS, DW1000.MODE_LONGDATA_RANGE_LOWPOWER, false); // Start UWB radio as an anchor; long range low power mode
+    DW1000Ranging.startAsAnchor(BEACON_HARDWARE_ADDRESS, DW1000.MODE_LONGDATA_RANGE_LOWPOWER, false); // Start UWB radio as an anchor; long range low power mode
 }
 
 void loop() {
@@ -36,8 +44,14 @@ void loop() {
  * @param device New DW1000 UWB device to be registered
 */
 void newDevice(DW1000Device *device) {
-    Serial.print("rover connected: ");
-    Serial.println(device->getShortAddress(), HEX);
+    LOG_INFO("New device connected");
+    if (device->getShortAddress() != ROVER_SHORT_ADDRESS) {
+        LOG_WARN("New device not recognized as ROVER");
+        return;
+    }
+
+    // Rover activated
+    LOG_INFO("ROVER connected. Short address: " + device->getShortAddress());
 }
 
 /**
@@ -46,6 +60,11 @@ void newDevice(DW1000Device *device) {
  * @param device Pointer to connected device
 */
 void inactiveDevice(DW1000Device *device) {
-    Serial.print("rover disconnected: ");
-    Serial.println(device->getShortAddress(), HEX);
+    if (device->getShortAddress() != ROVER_SHORT_ADDRESS) {
+        LOG_INFO("Unrecognized device disconnected");
+        return;
+    }
+
+    // Rover deactivated
+    LOG_ERROR("ROVER disconnected");
 }
