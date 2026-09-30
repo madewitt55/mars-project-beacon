@@ -21,7 +21,7 @@
 #include "DW1000Ranging.h" // MakerFabs DW1000 UWB chip ranging library, imported as ZIP
 #include "Logger.h" // Local logging helper class
 
-Logger log; // Initialize logger on default serial
+Logger logger; // Initialize logger on default serial
 
 //---------- Bluetooth ----------
 BluetoothSerial SerialBT;
@@ -72,11 +72,11 @@ bool parseMac(const char* plain_text_mac, uint8_t raw_mac[6]) {
 */
 void bluetoothCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* param) {
     if (event == ESP_SPP_OPEN_EVT) {
-        log.info("Bluetooth connected to ROVER");
+        logger.info("Bluetooth connected to ROVER");
         bt_connected = true;
     } else if (event == ESP_SPP_CLOSE_EVT) {
         if (bt_connected) {
-            log.error("ROVER disconnected from BT");
+            logger.error("ROVER disconnected from BT");
             bt_connected = false;
         }
     }
@@ -91,14 +91,14 @@ void bluetoothCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* param) {
  * @param device New device to be activated
 */
 void newDeviceCallback(DW1000Device *device) {
-    log.info("New UWB device detected");
+    logger.info("New UWB device detected");
     if (device->getShortAddress() != ROVER_SHORT_ADDRESS) {
-        log.warn("New UWB device not recognized as ROVER, ignoring");
+        logger.warn("New UWB device not recognized as ROVER, ignoring");
         return;
     }
 
     // Rover activated
-    log.info("New UWB device recognized as ROVER");
+    logger.info("New UWB device recognized as ROVER");
 }
 
 /**
@@ -110,12 +110,12 @@ void newDeviceCallback(DW1000Device *device) {
 */
 void inactiveDeviceCallback(DW1000Device *device) {
     if (device->getShortAddress() != ROVER_SHORT_ADDRESS) {
-        log.info("Unrecognized UWB device disconnected");
+        logger.info("Unrecognized UWB device disconnected");
         return;
     }
 
     // Rover deactivated
-    log.error("ROVER disconnected from UWB");
+    logger.error("ROVER disconnected from UWB");
 }
 
 void setup() {
@@ -123,15 +123,15 @@ void setup() {
     delay(3000); // Allow serial monitor time to open
 
     SerialBT.register_callback(bluetoothCallback); // Callback function fires every time BT stack has an event
-    SerialBT.begin(BEACON_BT_NAME, true); // true = master mode; connects to rover
+    SerialBT.begin(BEACON_BT_NAME, true); // true = master mode; beacon does not listen for connections, only initiates them
 
     // Bluetooth connection to rover
-    log.info("Attempting Bluetooth connection with ROVER");
+    logger.info("Attempting Bluetooth connection with ROVER");
     uint8_t rover_mac[6];
     if (!parseMac(ROVER_BT_MAC, rover_mac)) {
-        log.error("ROVER_BT_MAC is malformed, cannot connect");
+        logger.error("ROVER_BT_MAC is malformed, cannot connect");
     } else if (!SerialBT.connect(rover_mac)) {
-        log.warn("Bluetooth connection to ROVER failed");
+        logger.warn("Bluetooth connection to ROVER failed");
     }
 
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI); // Initialize SPI bus, hardwired to onboard DW1000 UWB chip
