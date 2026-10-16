@@ -1,3 +1,8 @@
+/**
+ * @file Logger.h
+ * @brief Logger class for logging information in a consistent format
+ */
+
 #ifndef LOGGER_H
 #define LOGGER_H
 
@@ -6,7 +11,7 @@
 /**
  * @class Logger
  *
- * @brief Provides utility methods for logging information in a consistent format
+ * @brief Provides utility methods for logging information over serial
  */
 class Logger {
     public:

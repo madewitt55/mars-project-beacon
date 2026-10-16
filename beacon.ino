@@ -16,19 +16,11 @@
  */
 
 #include <SPI.h> // Enables Serial Peripheral Interface communication
-#include <BluetoothSerial.h> // Enables classic Bluetooth Serial Port Profile communication
-#include "esp_spp_api.h" // Allows registration of Serial Port Profile Bluetooth callbacks
 #include "DW1000Ranging.h" // MakerFabs DW1000 UWB chip ranging library, imported as ZIP
 #include "Logger.h" // Local logging helper class
+#include "Bluetooth.h" // Local Bluetooth SPP connection and rover command helpers
 
 Logger logger; // Initialize logger on default serial
-
-//---------- Bluetooth ----------
-BluetoothSerial SerialBT;
-volatile bool bt_connected = false;
-#define BEACON_BT_NAME "BEACON"
-#define BEACON_BT_MAC "B0:A7:32:1B:93:62"
-#define ROVER_BT_MAC "64:B7:08:66:8D:56"
 
 //---------- UltraWide Band ----------
 // Controller: Microcontroller, Peripheral: DW1000 UWB
@@ -43,44 +35,13 @@ const uint16_t DW1000_ANTENNA_DELAY = 16470; // 1 unit = 15.65ps (picoseconds)
 #define ROVER_HARDWARE_ADDRESS "7D:00:22:EA:82:60:3B:9C"  // Hardware address of rover DW1000 UWB chip
 #define ROVER_SHORT_ADDRESS 0xA49C                        // Short address of rover, derived from first two bytes of ROVER_HARDWARE_ADDRESS
 
-/**
- * @brief Helper function for parsing a plain text colon-separated MAC address into a raw MAC address
- *
- * @note Used for converting a hardcoded readable MAC into the raw 6-byte form expected by BluetoothSerial::connect.
- *
- * @param plain_text_mac MAC address string, formatted as six colon-separated hex byte pairs (e.g. "AA:BB:CC:DD:EE:FF")
- * @param raw_mac Output buffer to receive the parsed raw 6-byte MAC address
- *
- * @return `true` if `plain_text_mac` was successfully parsed into `raw_mac`, `false` otherwise
-*/
-bool parseMac(const char* plain_text_mac, uint8_t raw_mac[6]) {
-    int parsed = sscanf(plain_text_mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-                        &raw_mac[0], &raw_mac[1], &raw_mac[2],
-                        &raw_mac[3], &raw_mac[4], &raw_mac[5]);
-    return parsed == 6;
-}
-
-/**
- * @brief Handles Bluetooth connection events for the outbound connection to the rover
- *
- * @note Registered as the callback for the Bluetooth SPP stack. Beacon is the SPP master, so the
-         outbound connection it initiates completes as `ESP_SPP_OPEN_EVT` rather than the
-         `ESP_SPP_SRV_OPEN_EVT` used by an SPP server.
- *
- * @param event Type of Bluetooth event that occurred (e.g. device connected, device disconnected)
- * @param param Event-specific data, unused here
-*/
-void bluetoothCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t* param) {
-    if (event == ESP_SPP_OPEN_EVT) {
-        logger.info("Bluetooth connected to ROVER");
-        bt_connected = true;
-    } else if (event == ESP_SPP_CLOSE_EVT) {
-        if (bt_connected) {
-            logger.error("ROVER disconnected from BT");
-            bt_connected = false;
-        }
-    }
-}
+//---------- Joystick ----------
+#define JOYSTICK_VRX 36      // Analog input for joystick X axis
+#define JOYSTICK_VRY 39      // Analog input for joystick Y axis
+#define JOYSTICK_ADC_MAX 4095 // Maximum raw reading from the ESP32's 12-bit ADC
+#define JOYSTICK_BASE_X -0.08f // Measured resting X value, subtracted out to calibrate center to 0
+#define JOYSTICK_BASE_Y -0.1f  // Measured resting Y value, subtracted out to calibrate center to 0
+#define JOYSTICK_DEADZONE 0.05f // Normalized magnitude below which axis input is treated as 0 (absorbs center drift/jitter)
 
 /**
  * @brief Activates a new connected DW1000 UWB device
@@ -122,17 +83,7 @@ void setup() {
     Serial.begin(9600); // Baud rate 9600 Bd
     delay(3000); // Allow serial monitor time to open
 
-    SerialBT.register_callback(bluetoothCallback); // Callback function fires every time BT stack has an event
-    SerialBT.begin(BEACON_BT_NAME, true); // true = master mode; beacon does not listen for connections, only initiates them
-
-    // Bluetooth connection to rover
-    logger.info("Attempting Bluetooth connection with ROVER");
-    uint8_t rover_mac[6];
-    if (!parseMac(ROVER_BT_MAC, rover_mac)) {
-        logger.error("ROVER_BT_MAC is malformed, cannot connect");
-    } else if (!SerialBT.connect(rover_mac)) {
-        logger.warn("Bluetooth connection to ROVER failed");
-    }
+    beginBluetooth(); // Registers the BT callback and connects out to the rover
 
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI); // Initialize SPI bus, hardwired to onboard DW1000 UWB chip
     DW1000Ranging.initCommunication(PIN_RST, PIN_PS, PIN_IRQ); // Initialize DW1000 UWB chip
@@ -147,4 +98,62 @@ void setup() {
 
 void loop() {
     DW1000Ranging.loop(); // Ranging library's main state machine, must be called repeatedly
+
+    // Read joystick
+    float motor_left, motor_right;
+    readJoystickMotorValues(motor_left, motor_right);
+
+    sendMotorValues(motor_left, motor_right); // Send instructions
+
+    delay(100);
+}
+
+/**
+ * @brief Reads the joystick and converts it into calibrated left/right motor power levels
+ *
+ * @note Uses arcade-style controls: y-axis is throttle, x-axis is turn. Clamps raw joystick readings 
+         to a -1.0 to 1.0 range after accounting for measured resting values and configured deadzones.
+ *
+ * @param motor_left Output: desired left motor power, from -1.0 (full reverse) to 1.0 (full forward)
+ * @param motor_right Output: desired right motor power, from -1.0 (full reverse) to 1.0 (full forward)
+*/
+void readJoystickMotorValues(float &motor_left, float &motor_right) {
+    // Raw x is read from joystick's y axis, raw y is read from joystick's x axis
+    // These are swapped to acheive accurate values with the desired joystick orientation
+    uint16_t joystick_raw_x = analogRead(JOYSTICK_VRY);
+    uint16_t joystick_raw_y = analogRead(JOYSTICK_VRX);
+
+    // Constrain joystick values to -1 to 1 range, considering measured resting values for each axis
+    float joystick_x = constrain((joystick_raw_x * 2.0f / JOYSTICK_ADC_MAX) - 1.0f - JOYSTICK_BASE_Y, -1.0f, 1.0f);
+    float joystick_y = constrain((joystick_raw_y * 2.0f / JOYSTICK_ADC_MAX) - 1.0f - JOYSTICK_BASE_X, -1.0f, 1.0f);
+
+    // Apply deadzones
+    if (fabsf(joystick_x) < JOYSTICK_DEADZONE) joystick_x = 0.0f;
+    if (fabsf(joystick_y) < JOYSTICK_DEADZONE) joystick_y = 0.0f;
+
+    // Arcade-style controls: y-axis is throttle, x-axis is turn
+    motor_left = constrain(joystick_y + joystick_x, -1.0f, 1.0f);
+    motor_right = constrain(joystick_y - joystick_x, -1.0f, 1.0f);
+}
+
+/**
+ * @brief Sends the MOTORS command with validated left and right motor power levels
+ *
+ * @note Clamps `left` and `right` to the valid -1.0 to 1.0 range before sending. Values are
+         written as decimal text, e.g. `sendMotorValues(-0.5, 1.0)` sends
+         "LEFT\n0.50\nRIGHT\n1.00\n".
+ *
+ * @param left Desired left motor power, from -1.0 (full reverse) to 1.0 (full forward)
+ * @param right Desired right motor power, from -1.0 (full reverse) to 1.0 (full forward)
+*/
+void sendMotorValues(float left, float right) {
+    if (!bt_connected) {
+        //logger.warn("Cannot send command, ROVER not connected");
+        return;
+    }
+    // Constrain left and right to float value from -1.0 to 1.0
+    left = constrain(left, -1.0f, 1.0f);
+    right = constrain(right, -1.0f, 1.0f);
+    sendCommand(CMD_LEFT, left);
+    sendCommand(CMD_RIGHT, right);
 }
