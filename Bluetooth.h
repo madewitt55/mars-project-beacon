@@ -20,8 +20,8 @@ extern Logger logger; // Defined in beacon.ino
 BluetoothSerial SerialBT;
 volatile bool bt_connected = false;
 #define BEACON_BT_NAME "BEACON"
-#define BEACON_BT_MAC "B0:A7:32:1B:93:62"
-#define ROVER_BT_MAC "64:B7:08:66:8D:56"
+#define ROVER_BT_MAC "58:2A:BD:D2:E5:96"
+#define BEACON_BT_MAC "20:50:0D:E4:5C:92"
 
 // Rover commands
 #define CMD_LEFT "LEFT"
