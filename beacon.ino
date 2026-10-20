@@ -14,7 +14,7 @@
 Logger logger; // Initialize logger on default serial
 
 //---------- Joystick ----------
-#define JOYSTICK_VRX 36      // Analog input for joystick X axis
+#define JOYSTICK_VRX 36      // Analog input for joystick X axis 
 #define JOYSTICK_VRY 39      // Analog input for joystick Y axis
 #define JOYSTICK_ADC_MAX 4095 // Maximum raw reading from the ESP32's 12-bit ADC
 #define JOYSTICK_BASE_X -0.08f // Measured resting X value, subtracted out to calibrate center to 0
@@ -32,10 +32,12 @@ void loop() {
     // Read joystick
     float motor_left, motor_right;
     readJoystickMotorValues(motor_left, motor_right);
+    Serial.println(motor_left);
+    Serial.println(motor_right);
 
     sendMotorValues(motor_left, motor_right); // Send instructions
 
-    delay(100);
+    delay(300);
 }
 
 /**
